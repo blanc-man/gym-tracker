@@ -8,3 +8,11 @@ services:
     restart: unless-stopped
     ports:
       - "3003:80"
+    networks:
+      - default
+      - roster_net
+
+networks:
+  roster_net:
+    external: true
+    name: bhrcg_roster_net
