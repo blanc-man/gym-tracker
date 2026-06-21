@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { db } from '../db'
 import { formatShortDate } from '../utils/motivational'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Dot } from 'recharts'
-import { ChevronDown, ChevronUp } from 'lucide-react'
+import { ChevronDown, ChevronUp, Trash2 } from 'lucide-react'
 
 const RANGES = [
   { label: 'Last 4 weeks', weeks: 4 },
@@ -18,23 +18,31 @@ export default function Progress() {
   const [pbs, setPbs] = useState([])
   const [range, setRange] = useState(0)
   const [expandedSession, setExpandedSession] = useState(null)
+  const [deleteConfirm, setDeleteConfirm] = useState(null)
 
-  useEffect(() => {
-    async function load() {
-      const [exs, sess, allSets, allPbs] = await Promise.all([
-        db.exercises.toArray(),
-        db.sessions.orderBy('date').reverse().toArray(),
-        db.sets.toArray(),
-        db.pbs.toArray(),
-      ])
-      setExercises(exs)
-      setSessions(sess)
-      setSets(allSets)
-      setPbs(allPbs)
-      if (exs.length) setSelectedExId(exs[0].id)
-    }
+  async function load() {
+    const [exs, sess, allSets, allPbs] = await Promise.all([
+      db.exercises.toArray(),
+      db.sessions.orderBy('date').reverse().toArray(),
+      db.sets.toArray(),
+      db.pbs.toArray(),
+    ])
+    setExercises(exs)
+    setSessions(sess)
+    setSets(allSets)
+    setPbs(allPbs)
+    if (exs.length && !selectedExId) setSelectedExId(exs[0].id)
+  }
+
+  useEffect(() => { load() }, [])
+
+  async function deleteSession(id) {
+    await db.sets.where('sessionId').equals(id).delete()
+    await db.sessions.delete(id)
+    setDeleteConfirm(null)
+    setExpandedSession(null)
     load()
-  }, [])
+  }
 
   const cutoff = useMemo(() => {
     const weeks = RANGES[range].weeks
@@ -70,7 +78,6 @@ export default function Progress() {
 
   const selectedEx = exercises.find(e => e.id === selectedExId)
 
-  // Session history (filtered by range)
   const filteredSessions = useMemo(() => {
     return sessions.filter(s => !cutoff || s.date >= cutoff)
   }, [sessions, cutoff])
@@ -176,6 +183,7 @@ export default function Progress() {
                 const sessSets = getSetsForSession(sess.id)
                 const exIds = [...new Set(sessSets.map(s => s.exerciseId))]
                 const isExpanded = expandedSession === sess.id
+                const isPendingDelete = deleteConfirm === sess.id
 
                 return (
                   <div key={sess.id} className="bg-white rounded-2xl border border-gray-200 shadow-sm mb-3 overflow-hidden">
@@ -186,8 +194,10 @@ export default function Progress() {
                       <div className="flex-1 text-left">
                         <p className="font-bold text-gray-900">{formatShortDate(sess.date)}</p>
                         <p className="text-sm text-gray-500 mt-0.5">
-                          {exIds.length} exercise{exIds.length !== 1 ? 's' : ''} · {sessSets.length} sets
-                          {sess.notes && sess.notes !== 'Custom workout' ? ` · ${sess.notes.slice(0, 30)}` : ''}
+                          {exIds.length > 0
+                            ? `${exIds.length} exercise${exIds.length !== 1 ? 's' : ''} · ${sessSets.length} sets`
+                            : sess.notes?.includes('Duration') ? sess.notes.split('\n')[0] : 'Cardio session'
+                          }
                         </p>
                       </div>
                       {isExpanded ? <ChevronUp size={18} className="text-gray-400" /> : <ChevronDown size={18} className="text-gray-400" />}
@@ -210,8 +220,26 @@ export default function Progress() {
                             </div>
                           )
                         })}
-                        {sess.notes && sess.notes !== 'Custom workout' && (
+                        {sess.notes && !sess.notes.startsWith('Custom') && (
                           <p className="text-sm text-gray-500 italic border-t border-gray-100 pt-2 mt-2">{sess.notes}</p>
+                        )}
+
+                        {/* Delete session */}
+                        {!isPendingDelete ? (
+                          <button
+                            onClick={() => setDeleteConfirm(sess.id)}
+                            className="mt-3 flex items-center gap-2 text-red-400 text-sm font-medium active:text-red-600"
+                          >
+                            <Trash2 size={15} /> Delete this workout
+                          </button>
+                        ) : (
+                          <div className="mt-3 bg-red-50 rounded-xl p-3">
+                            <p className="text-sm text-red-700 font-semibold mb-2">Delete this workout?</p>
+                            <div className="flex gap-2">
+                              <button onClick={() => setDeleteConfirm(null)} className="flex-1 py-2 rounded-lg border border-gray-200 text-gray-600 text-sm font-semibold">Cancel</button>
+                              <button onClick={() => deleteSession(sess.id)} className="flex-1 py-2 rounded-lg bg-red-500 text-white text-sm font-semibold">Delete</button>
+                            </div>
+                          </div>
                         )}
                       </div>
                     )}
