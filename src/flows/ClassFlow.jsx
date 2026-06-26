@@ -308,6 +308,18 @@ function WeightStep({ template, date, presets, onSave, onBack }) {
     setSaving(true)
     try {
       const sessionId = await db.sessions.add({ date, classTemplateId: template.id, notes: '' })
+
+      if (presets) {
+        await db.sessionPresets.add({
+          sessionId,
+          classTemplateId: template.id,
+          light: presets.light ?? 0,
+          medium: presets.medium ?? 0,
+          heavy: presets.heavy ?? 0,
+          savedAt: new Date().toISOString(),
+        })
+      }
+
       const newPbs = []
 
       for (const row of rows) {

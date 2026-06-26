@@ -12,6 +12,17 @@ db.version(1).stores({
   meta:              'key'
 })
 
+db.version(2).stores({
+  exercises:         '++id, name, category, isCustom',
+  sessions:          '++id, date, classTemplateId, notes',
+  sets:              '++id, sessionId, exerciseId, setNumber, weight, reps, completedAt',
+  pbs:               '++id, exerciseId, weight, reps, achievedAt',
+  classTemplates:    '++id, name, icon, venue',
+  templateExercises: '++id, classTemplateId, exerciseId, order, skipCount',
+  meta:              'key',
+  sessionPresets:    '++id, sessionId, classTemplateId'
+})
+
 // ─── Seed data ────────────────────────────────────────────────────────────────
 
 const LIVING_STRONGER = [
