@@ -1,11 +1,41 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { db } from '../db'
 import { formatDate, todayISO, yesterdayISO } from '../utils/motivational'
-import Stepper from '../components/Stepper'
 import ExercisePicker from '../components/ExercisePicker'
 import { ChevronLeft, Plus, Check } from 'lucide-react'
 
-// ─── Step 1: Date picker ────────────────────────────────────────────────────
+// ─── Preset helpers (stored in localStorage per template) ────────────────────
+
+const PRESET_LABELS = ['light', 'medium', 'heavy']
+const PRESET_DISPLAY = { light: 'L', medium: 'M', heavy: 'H' }
+const PRESET_DEFAULTS = { light: 5, medium: 10, heavy: 15 }
+
+function loadPresets(templateId) {
+  try {
+    const raw = localStorage.getItem(`presets_${templateId}`)
+    return raw ? JSON.parse(raw) : { ...PRESET_DEFAULTS }
+  } catch { return { ...PRESET_DEFAULTS } }
+}
+
+function savePresets(templateId, presets) {
+  localStorage.setItem(`presets_${templateId}`, JSON.stringify(presets))
+}
+
+// Per-exercise: remember whether they used preset/custom and which preset
+function loadExMode(templateId, exerciseId) {
+  return localStorage.getItem(`exmode_${templateId}_${exerciseId}`) || 'preset'
+}
+function saveExMode(templateId, exerciseId, mode) {
+  localStorage.setItem(`exmode_${templateId}_${exerciseId}`, mode)
+}
+function loadExPreset(templateId, exerciseId) {
+  return localStorage.getItem(`expreset_${templateId}_${exerciseId}`) || null
+}
+function saveExPreset(templateId, exerciseId, preset) {
+  localStorage.setItem(`expreset_${templateId}_${exerciseId}`, preset)
+}
+
+// ─── Step 1: Date picker ─────────────────────────────────────────────────────
 
 function DateStep({ template, onNext, onBack }) {
   const [selected, setSelected] = useState(todayISO())
@@ -35,9 +65,7 @@ function DateStep({ template, onNext, onBack }) {
             key={opt.value}
             onClick={() => setSelected(opt.value)}
             className={`w-full flex items-center gap-4 p-4 rounded-2xl border-2 transition-all
-              ${selected === opt.value
-                ? 'border-teal-700 bg-teal-50'
-                : 'border-gray-200 bg-white'}`}
+              ${selected === opt.value ? 'border-teal-700 bg-teal-50' : 'border-gray-200 bg-white'}`}
           >
             <span className="text-2xl">{opt.emoji}</span>
             <div className="flex-1 text-left">
@@ -54,9 +82,7 @@ function DateStep({ template, onNext, onBack }) {
             if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) setSelected(d)
           }}
           className={`w-full flex items-center gap-4 p-4 rounded-2xl border-2 transition-all
-            ${!OPTIONS.find(o => o.value === selected)
-              ? 'border-teal-700 bg-teal-50'
-              : 'border-gray-200 bg-white'}`}
+            ${!OPTIONS.find(o => o.value === selected) ? 'border-teal-700 bg-teal-50' : 'border-gray-200 bg-white'}`}
         >
           <span className="text-2xl">📅</span>
           <div className="flex-1 text-left">
@@ -73,22 +99,103 @@ function DateStep({ template, onNext, onBack }) {
           onClick={() => onNext(selected)}
           className="w-full bg-teal-700 text-white font-bold text-lg py-4 rounded-2xl active:bg-teal-600"
         >
-          Next — Fill in weights →
+          Next →
         </button>
       </div>
     </div>
   )
 }
 
-// ─── Step 2: Weight quick-fill ──────────────────────────────────────────────
+// ─── Step 2: Set Light / Medium / Heavy weights ──────────────────────────────
 
-function WeightStep({ template, date, onSave, onBack }) {
-  const [rows, setRows] = useState([]) // { exercise, weight, reps, skipped, lastWeight, pb }
+function PresetsStep({ template, onNext, onBack }) {
+  const [presets, setPresets] = useState(() => loadPresets(template.id))
+
+  function setLevel(level, val) {
+    setPresets(p => ({ ...p, [level]: Math.max(0, +(val).toFixed(1)) }))
+  }
+
+  function handleNext() {
+    savePresets(template.id, presets)
+    onNext(presets)
+  }
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-3 px-5 pt-5 pb-4 flex-shrink-0 border-b border-gray-100">
+        <button onClick={onBack} className="min-tap w-10 h-10 flex items-center justify-center text-gray-500">
+          <ChevronLeft size={24} />
+        </button>
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">{template.icon} {template.name}</h1>
+          <p className="text-sm text-gray-500">Set today's weights</p>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-5 py-6">
+        <p className="text-gray-500 mb-6">
+          Enter your Light, Medium, and Heavy weights for today. You can use these as quick-select options for each exercise.
+        </p>
+
+        <div className="space-y-5">
+          {PRESET_LABELS.map(level => {
+            const colors = {
+              light:  { bg: 'bg-sky-50',    border: 'border-sky-200',   text: 'text-sky-700',   btn: 'bg-sky-600'   },
+              medium: { bg: 'bg-teal-50',   border: 'border-teal-200',  text: 'text-teal-700',  btn: 'bg-teal-600'  },
+              heavy:  { bg: 'bg-violet-50', border: 'border-violet-200',text: 'text-violet-700',btn: 'bg-violet-600'},
+            }
+            const c = colors[level]
+            const val = presets[level]
+            return (
+              <div key={level} className={`${c.bg} border ${c.border} rounded-2xl p-4`}>
+                <p className={`font-bold ${c.text} capitalize text-lg mb-3`}>{level}</p>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setLevel(level, val - 0.5)}
+                    className="min-tap w-12 h-12 rounded-full bg-white text-xl font-bold text-gray-700 flex items-center justify-center shadow-sm active:bg-gray-50"
+                  >−</button>
+                  <span className={`flex-1 text-center text-2xl font-bold ${c.text}`}>
+                    {(+val).toFixed(1)} <span className="text-base font-normal text-gray-500">kg</span>
+                  </span>
+                  <button
+                    onClick={() => setLevel(level, val + 0.5)}
+                    className={`min-tap w-12 h-12 rounded-full ${c.btn} text-xl font-bold text-white flex items-center justify-center active:opacity-80`}
+                  >+</button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="px-5 pb-6 pt-3 flex-shrink-0">
+        <button
+          onClick={handleNext}
+          className="w-full bg-teal-700 text-white font-bold text-lg py-4 rounded-2xl active:bg-teal-600"
+        >
+          Next — Fill in exercises →
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ─── Step 3: Weight quick-fill ───────────────────────────────────────────────
+
+const PRESET_CHIP_COLORS = {
+  light:  { base: 'bg-sky-100 text-sky-700 border-sky-200',   active: 'bg-sky-600 text-white border-sky-600'   },
+  medium: { base: 'bg-teal-100 text-teal-700 border-teal-200', active: 'bg-teal-600 text-white border-teal-600' },
+  heavy:  { base: 'bg-violet-100 text-violet-700 border-violet-200', active: 'bg-violet-600 text-white border-violet-600' },
+}
+
+function WeightStep({ template, date, presets, onSave, onBack }) {
+  const [rows, setRows] = useState([])
   const [showPicker, setShowPicker] = useState(false)
   const [allExercises, setAllExercises] = useState([])
   const [defaultSets] = useState(template.defaultSets || 3)
   const [defaultReps] = useState(template.defaultReps || 12)
   const [saving, setSaving] = useState(false)
+  const [pbMap, setPbMap] = useState({})
 
   useEffect(() => {
     async function load() {
@@ -97,10 +204,8 @@ function WeightStep({ template, date, onSave, onBack }) {
         db.templateExercises.where('classTemplateId').equals(template.id).sortBy('order'),
       ])
       setAllExercises(allEx)
-
       const exMap = Object.fromEntries(allEx.map(e => [e.id, e]))
 
-      // Get last session for this template to pre-fill weights
       const lastSession = await db.sessions
         .where('classTemplateId').equals(template.id)
         .reverse().first()
@@ -109,9 +214,8 @@ function WeightStep({ template, date, onSave, onBack }) {
       if (lastSession) {
         const lastSets = await db.sets.where('sessionId').equals(lastSession.id).toArray()
         lastSets.forEach(s => {
-          if (!lastWeightMap[s.exerciseId] || s.weight > lastWeightMap[s.exerciseId]) {
+          if (!lastWeightMap[s.exerciseId] || s.weight > lastWeightMap[s.exerciseId])
             lastWeightMap[s.exerciseId] = s.weight
-          }
         })
       }
 
@@ -119,32 +223,41 @@ function WeightStep({ template, date, onSave, onBack }) {
       const initialRows = visible.map(te => {
         const ex = exMap[te.exerciseId]
         if (!ex) return null
+
+        const lastWeight = lastWeightMap[ex.id] ?? 0
+        const rememberedMode   = loadExMode(template.id, ex.id)
+        const rememberedPreset = loadExPreset(template.id, ex.id)
+
+        // Determine which preset chip matches lastWeight (if any)
+        const matchingPreset = presets
+          ? PRESET_LABELS.find(l => Math.abs((presets[l] || 0) - lastWeight) < 0.01)
+          : null
+
         return {
           templateExerciseId: te.id,
           exerciseId: ex.id,
           exercise: ex,
-          weight: lastWeightMap[ex.id] ?? 0,
+          weight: lastWeight,
           reps: defaultReps,
           skipped: false,
-          lastWeight: lastWeightMap[ex.id] ?? null,
+          lastWeight: lastWeight || null,
           isNew: false,
+          // preset UI state
+          mode: rememberedMode,                                      // 'preset' | 'custom'
+          selectedPreset: rememberedPreset || matchingPreset || null, // 'light'|'medium'|'heavy'|null
         }
       }).filter(Boolean)
 
       setRows(initialRows)
     }
     load()
-  }, [template, defaultReps])
 
-  // Load PBs for amber highlight
-  const [pbMap, setPbMap] = useState({})
-  useEffect(() => {
     db.pbs.toArray().then(pbs => {
       const map = {}
       pbs.forEach(pb => { if (!map[pb.exerciseId] || pb.weight > map[pb.exerciseId]) map[pb.exerciseId] = pb.weight })
       setPbMap(map)
     })
-  }, [])
+  }, [template, defaultReps])
 
   function updateRow(idx, patch) {
     setRows(r => r.map((row, i) => i === idx ? { ...row, ...patch } : row))
@@ -154,15 +267,39 @@ function WeightStep({ template, date, onSave, onBack }) {
     setRows(r => r.map((row, i) => i === idx ? { ...row, skipped: !row.skipped } : row))
   }
 
+  function selectPreset(idx, level) {
+    const row = rows[idx]
+    const w = presets?.[level] ?? 0
+    updateRow(idx, { weight: w, selectedPreset: level, mode: 'preset' })
+    saveExMode(template.id, row.exerciseId, 'preset')
+    saveExPreset(template.id, row.exerciseId, level)
+  }
+
+  function switchToCustom(idx) {
+    const row = rows[idx]
+    updateRow(idx, { mode: 'custom', selectedPreset: null })
+    saveExMode(template.id, row.exerciseId, 'custom')
+  }
+
+  function switchToPreset(idx) {
+    const row = rows[idx]
+    updateRow(idx, { mode: 'preset' })
+    saveExMode(template.id, row.exerciseId, 'preset')
+  }
+
   function addExercise(ex) {
+    const mode = loadExMode(template.id, ex.id)
+    const rememberedPreset = loadExPreset(template.id, ex.id)
     setRows(r => [...r, {
       exerciseId: ex.id,
       exercise: ex,
-      weight: 0,
+      weight: (mode === 'preset' && rememberedPreset && presets) ? (presets[rememberedPreset] ?? 0) : 0,
       reps: defaultReps,
       skipped: false,
       lastWeight: null,
       isNew: true,
+      mode,
+      selectedPreset: rememberedPreset || null,
     }])
     setShowPicker(false)
   }
@@ -170,27 +307,17 @@ function WeightStep({ template, date, onSave, onBack }) {
   async function handleSave() {
     setSaving(true)
     try {
-      const sessionId = await db.sessions.add({
-        date,
-        classTemplateId: template.id,
-        notes: '',
-      })
-
+      const sessionId = await db.sessions.add({ date, classTemplateId: template.id, notes: '' })
       const newPbs = []
 
       for (const row of rows) {
         if (row.skipped) continue
         for (let s = 1; s <= defaultSets; s++) {
           await db.sets.add({
-            sessionId,
-            exerciseId: row.exerciseId,
-            setNumber: s,
-            weight: row.weight,
-            reps: row.reps,
-            completedAt: new Date().toISOString(),
+            sessionId, exerciseId: row.exerciseId, setNumber: s,
+            weight: row.weight, reps: row.reps, completedAt: new Date().toISOString(),
           })
         }
-        // Check PB
         const curPb = pbMap[row.exerciseId] || 0
         if (row.weight > curPb) {
           await db.pbs.add({ exerciseId: row.exerciseId, weight: row.weight, reps: row.reps, achievedAt: new Date().toISOString() })
@@ -198,7 +325,6 @@ function WeightStep({ template, date, onSave, onBack }) {
         }
       }
 
-      // Update template: increment skipCount for skipped rows, add new exercises
       for (const row of rows) {
         if (row.templateExerciseId) {
           if (row.skipped) {
@@ -208,14 +334,8 @@ function WeightStep({ template, date, onSave, onBack }) {
             await db.templateExercises.update(row.templateExerciseId, { skipCount: 0 })
           }
         } else if (row.isNew && !row.skipped) {
-          // New exercise added mid-session — add to template
-          const maxOrder = Math.max(0, ...rows.map((r, i) => i))
-          await db.templateExercises.add({
-            classTemplateId: template.id,
-            exerciseId: row.exerciseId,
-            order: maxOrder + 1,
-            skipCount: 0,
-          })
+          const maxOrder = Math.max(0, ...rows.map((_, i) => i))
+          await db.templateExercises.add({ classTemplateId: template.id, exerciseId: row.exerciseId, order: maxOrder + 1, skipCount: 0 })
         }
       }
 
@@ -227,6 +347,7 @@ function WeightStep({ template, date, onSave, onBack }) {
   }
 
   const recentNames = rows.map(r => r.exercise?.name).filter(Boolean)
+  const hasPresets = presets && PRESET_LABELS.some(l => (presets[l] || 0) > 0)
 
   return (
     <div className="flex flex-col h-full">
@@ -237,21 +358,30 @@ function WeightStep({ template, date, onSave, onBack }) {
         <div className="flex-1">
           <h1 className="text-xl font-bold text-gray-900">{template.icon} {template.name}</h1>
           <p className="text-sm text-gray-500">{formatDate(date)} · {defaultSets} sets · {defaultReps} reps each</p>
-          <p className="text-sm text-gray-500 mt-0.5">Fill in the weight you used. Skip anything you didn't do.</p>
+          {hasPresets && (
+            <div className="flex gap-2 mt-1.5 flex-wrap">
+              {PRESET_LABELS.map(l => (
+                <span key={l} className={`text-xs font-semibold px-2 py-0.5 rounded-full ${PRESET_CHIP_COLORS[l].active}`}>
+                  {l.charAt(0).toUpperCase() + l.slice(1)} {(+presets[l]).toFixed(1)}kg
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
         {rows.map((row, idx) => {
           const isPbBeaten = row.weight > 0 && pbMap[row.exerciseId] && row.weight > pbMap[row.exerciseId]
+
           return (
             <div
               key={`${row.exerciseId}-${idx}`}
-              onClick={() => toggleSkip(idx)}
-              className={`rounded-2xl border p-4 transition-all cursor-pointer
+              className={`rounded-2xl border p-4 transition-all
                 ${row.skipped ? 'border-gray-200 bg-gray-50 opacity-60' : 'border-gray-200 bg-white shadow-sm'}`}
             >
-              <div className="flex items-center gap-3">
+              {/* Header row — tap to skip */}
+              <div className="flex items-center gap-3 cursor-pointer" onClick={() => toggleSkip(idx)}>
                 <span className="text-2xl">{row.exercise.icon || '🏋️'}</span>
                 <div className="flex-1 min-w-0">
                   <p className="font-semibold text-gray-900 truncate">{row.exercise.name}</p>
@@ -265,20 +395,69 @@ function WeightStep({ template, date, onSave, onBack }) {
               </div>
 
               {!row.skipped && (
-                <div className="mt-3 flex items-center gap-3" onClick={e => e.stopPropagation()}>
-                  <button
-                    onClick={() => updateRow(idx, { weight: Math.max(0, +(row.weight - 0.5).toFixed(1)) })}
-                    className="min-tap w-11 h-11 rounded-full bg-gray-100 text-xl font-bold text-gray-700 flex items-center justify-center"
-                  >−</button>
-                  <div className="flex-1 text-center">
-                    <span className={`text-xl font-bold ${isPbBeaten ? 'text-amber-500' : 'text-gray-900'}`}>
-                      {(+row.weight).toFixed(1)}kg
-                    </span>
-                  </div>
-                  <button
-                    onClick={() => updateRow(idx, { weight: +(row.weight + 0.5).toFixed(1) })}
-                    className="min-tap w-11 h-11 rounded-full bg-teal-700 text-xl font-bold text-white flex items-center justify-center"
-                  >+</button>
+                <div className="mt-3" onClick={e => e.stopPropagation()}>
+                  {/* Preset mode */}
+                  {row.mode === 'preset' && hasPresets && (
+                    <div>
+                      <div className="flex gap-2">
+                        {PRESET_LABELS.map(level => {
+                          const isSelected = row.selectedPreset === level
+                          const c = PRESET_CHIP_COLORS[level]
+                          return (
+                            <button
+                              key={level}
+                              onClick={() => selectPreset(idx, level)}
+                              className={`flex-1 py-3 rounded-xl border font-bold text-sm transition-all active:opacity-80
+                                ${isSelected ? c.active : c.base}`}
+                            >
+                              <span className="block text-xs font-semibold opacity-75 capitalize">{level}</span>
+                              <span className="block text-base leading-tight">{(+presets[level]).toFixed(1)}kg</span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                      <div className="mt-2 flex items-center justify-between">
+                        {row.selectedPreset ? (
+                          <span className={`text-sm font-bold ${isPbBeaten ? 'text-amber-500' : 'text-gray-600'}`}>
+                            {(+row.weight).toFixed(1)}kg{isPbBeaten ? ' 🌟' : ''}
+                          </span>
+                        ) : (
+                          <span className="text-sm text-gray-400">Tap a weight above</span>
+                        )}
+                        <button onClick={() => switchToCustom(idx)} className="text-xs text-gray-400 underline">
+                          Enter custom weight
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Custom mode (or no presets) */}
+                  {(row.mode === 'custom' || !hasPresets) && (
+                    <div>
+                      <div className="flex items-center gap-3">
+                        <button
+                          onClick={() => updateRow(idx, { weight: Math.max(0, +(row.weight - 0.5).toFixed(1)) })}
+                          className="min-tap w-11 h-11 rounded-full bg-gray-100 text-xl font-bold text-gray-700 flex items-center justify-center"
+                        >−</button>
+                        <div className="flex-1 text-center">
+                          <span className={`text-xl font-bold ${isPbBeaten ? 'text-amber-500' : 'text-gray-900'}`}>
+                            {(+row.weight).toFixed(1)}kg
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => updateRow(idx, { weight: +(row.weight + 0.5).toFixed(1) })}
+                          className="min-tap w-11 h-11 rounded-full bg-teal-700 text-xl font-bold text-white flex items-center justify-center"
+                        >+</button>
+                      </div>
+                      {hasPresets && (
+                        <div className="mt-2 text-right">
+                          <button onClick={() => switchToPreset(idx)} className="text-xs text-gray-400 underline">
+                            Use L / M / H
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -314,7 +493,7 @@ function WeightStep({ template, date, onSave, onBack }) {
   )
 }
 
-// ─── Step 3: Aqua / cardio-only ─────────────────────────────────────────────
+// ─── Step 4: Aqua / cardio-only ──────────────────────────────────────────────
 
 function AquaStep({ template, date, onSave, onBack }) {
   const [duration, setDuration] = useState(45)
@@ -353,7 +532,6 @@ function AquaStep({ template, date, onSave, onBack }) {
             <button onClick={() => setDuration(d => d + 5)} className="min-tap w-12 h-12 rounded-full bg-teal-700 text-xl font-bold text-white flex items-center justify-center">+</button>
           </div>
         </div>
-
         <div>
           <p className="font-semibold text-gray-700 mb-2">Notes (optional)</p>
           <textarea
@@ -379,7 +557,7 @@ function AquaStep({ template, date, onSave, onBack }) {
   )
 }
 
-// ─── Step 4: Celebration ─────────────────────────────────────────────────────
+// ─── Step 5: Celebration ─────────────────────────────────────────────────────
 
 function CelebrationStep({ result, onDone }) {
   const { date, template, exercisesDone, setsDone, newPbs } = result
@@ -447,6 +625,7 @@ function CelebrationStep({ result, onDone }) {
 export default function ClassFlow({ template, onDone }) {
   const [step, setStep] = useState('date')
   const [date, setDate] = useState(null)
+  const [presets, setPresets] = useState(null)
   const [result, setResult] = useState(null)
   const isCardio = template.isCardioOnly
 
@@ -454,8 +633,18 @@ export default function ClassFlow({ template, onDone }) {
     return (
       <DateStep
         template={template}
-        onNext={d => { setDate(d); setStep('weights') }}
+        onNext={d => { setDate(d); setStep(isCardio ? 'weights' : 'presets') }}
         onBack={onDone}
+      />
+    )
+  }
+
+  if (step === 'presets') {
+    return (
+      <PresetsStep
+        template={template}
+        onNext={p => { setPresets(p); setStep('weights') }}
+        onBack={() => setStep('date')}
       />
     )
   }
@@ -466,8 +655,9 @@ export default function ClassFlow({ template, onDone }) {
       <WeightComponent
         template={template}
         date={date}
+        presets={presets}
         onSave={res => { setResult(res); setStep('celebrate') }}
-        onBack={() => setStep('date')}
+        onBack={() => setStep(isCardio ? 'date' : 'presets')}
       />
     )
   }
